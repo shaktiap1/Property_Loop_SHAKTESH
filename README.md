@@ -1,127 +1,235 @@
-# Financial RAG System : End‑to‑End Architecture (In‑Depth)
+# Financial RAG System
 
-This document explains the **complete architecture** of the financial question‑answering system.
+> End-to-end Retrieval Augmented Generation (RAG) architecture designed to answer financial questions using validated trade and holdings datasets.
 
-The system is divided into **two major macro‑pipelines**:
+The system converts structured financial data into semantic embeddings, indexes them using FAISS, and retrieves grounded answers through a deterministic query pipeline.
 
-1. **Offline / Build‑Time Pipeline**
-   (Data → Embeddings → PCA → FAISS Indexes)
-2. **Online / Runtime Pipeline**
-   (Query → Intent → Retrieval → Generation)
+The system is divided into **two major macro pipelines**:
 
-Each macro‑pipeline is itself composed of **smaller, well‑defined sub‑architectures**.
+1. **Offline Build Pipeline**  
+   Converts financial datasets into vector indexes.
 
----
+2. **Online Query Pipeline**  
+   Processes user queries and retrieves context grounded answers.
 
-## PIPELINE A  OFFLINE BUILD PIPELINE
-
-> **Goal:** Convert raw financial data into optimized vector indexes ready for fast semantic search.
-
-This pipeline is **deterministic, repeatable, and cost‑sensitive**.
-It is executed **once** or on data refresh — **never per user query**.
+The architecture ensures that answers are **traceable, deterministic, and safe for financial data usage**.
 
 ---
 
-## A1. Raw Data Ingestion Architecture
+# Overview
 
-```text
-CSV Files
-├── trades.csv
-└── holdings.csv
-        ↓
-Pandas DataFrames
+Financial datasets such as **trade logs and portfolio holdings** contain valuable insights but are difficult to query using natural language.
+
+Traditional systems require knowledge of **SQL, schemas, and database structures**, which limits accessibility.
+
+This system solves that problem by enabling **natural language querying over financial data** while maintaining strict numerical accuracy.
+
+Instead of allowing LLM hallucinations, the system follows a strict architecture:
+
+1. Load financial CSV datasets
+2. Validate schemas and enforce data discipline
+3. Convert rows into semantic descriptions
+4. Generate embeddings
+5. Reduce dimensions using PCA
+6. Build FAISS vector indexes
+7. Detect user query intent
+8. Retrieve relevant records
+9. Generate answers using retrieved context only
+
+The result is a **high-precision financial question answering system**.
+
+---
+
+# Key Features
+
+- Deterministic Retrieval Augmented Generation architecture
+- Schema validation for financial datasets
+- Semantic row serialization for structured financial records
+- Batch optimized embedding generation
+- PCA dimensionality reduction
+- FAISS IVF + Product Quantization indexing
+- Query intent detection and routing
+- Redis semantic caching
+- Context reconstruction from original CSV rows
+- Strict guardrails to prevent hallucinated answers
+- Modular offline and online pipelines
+
+---
+
+# System Architecture
+
+The complete system consists of **two macro pipelines**.
+
+```mermaid
+flowchart LR
+
+A["Raw Financial Data"] --> B["Schema Validation"]
+B --> C["Semantic Serialization"]
+C --> D["Embedding Generation"]
+D --> E["PCA Reduction"]
+E --> F["FAISS Index Creation"]
+
+F --> G["Query Pipeline"]
+
+G --> H["Semantic Cache"]
+H --> I["Intent Detection"]
+I --> J["Query Embedding"]
+J --> K["Vector Search"]
+K --> L["Context Reconstruction"]
+L --> M["Answer Generation"]
 ```
 
-**Key properties**:
+---
 
-* Data is treated as the **source of truth**
-* No LLM involvement
-* No transformation beyond loading
+# Offline Build Pipeline
+
+The offline pipeline converts raw financial datasets into optimized vector indexes.
+
+This pipeline runs **once during initialization or dataset refresh**.
+
+```mermaid
+flowchart LR
+
+CSV["CSV Files"]
+Validate["Schema Validation"]
+Serialize["Semantic Serialization"]
+Embed["Embedding Generation"]
+PCA["PCA Reduction"]
+Index["FAISS Index"]
+
+CSV --> Validate
+Validate --> Serialize
+Serialize --> Embed
+Embed --> PCA
+PCA --> Index
+```
 
 ---
 
-## A2. Schema Validation & Data Discipline Layer
+# Raw Data Ingestion
 
-```text
-Raw DataFrame
-      ↓
-Schema Validator
-      ↓
-Validated DataFrame
+Financial datasets are loaded from CSV files.
+
+```mermaid
+flowchart LR
+
+Trades["trades.csv"]
+Holdings["holdings.csv"]
+Pandas["Pandas DataFrames"]
+
+Trades --> Pandas
+Holdings --> Pandas
 ```
 
-**What happens here:**
+### Data Sources
 
-* Mandatory column presence checks
-* Strict date parsing (`TradeDate`, `AsOfDate`)
-* Numeric enforcement (`Quantity`, `Price`, `Qty`, `MV_Base`, `PL_YTD`)
-* Null rejection in critical fields
+| Dataset | Description |
+|---|---|
+| trades.csv | Contains trade execution records |
+| holdings.csv | Contains portfolio holding positions |
 
-**Special handling (Trades):**
+These datasets act as the **source of truth** for the system.
 
-```text
+No LLM interaction occurs at this stage.
+
+---
+
+# Schema Validation Layer
+
+Before generating embeddings, the system validates financial data.
+
+```mermaid
+flowchart LR
+
+Raw["Raw DataFrame"]
+Validator["Schema Validator"]
+Clean["Validated DataFrame"]
+
+Raw --> Validator
+Validator --> Clean
+```
+
+### Validation Checks
+
+| Validation | Purpose |
+|---|---|
+| Mandatory columns | Ensure required financial fields exist |
+| Date parsing | Validate TradeDate and AsOfDate |
+| Numeric enforcement | Validate Quantity, Price, Market Value |
+| Null detection | Prevent incomplete records |
+| Price checks | Detect invalid financial values |
+
+### Invalid Trade Handling
+
+Trades with invalid price values are quarantined.
+
+```
 Price ≤ 0
-   ↓
-Quarantine → trades_quarantine.csv
+      ↓
+trades_quarantine.csv
 ```
 
-This ensures:
-
-* Invalid financial records never pollute embeddings
-* Auditability is preserved
+This ensures corrupted records **never enter the embedding pipeline**.
 
 ---
 
-## A3. Semantic Row Serialization Layer
+# Semantic Serialization Layer
 
-```text
-Validated Rows
-      ↓
-Row → Natural‑Language Description
-      ↓
-semantic_core (string)
+Structured rows are converted into **semantic sentences**.
+
+```mermaid
+flowchart LR
+
+Rows["Validated Rows"]
+Transform["Row → Natural Language"]
+Text["Semantic Core Text"]
+
+Rows --> Transform
+Transform --> Text
 ```
 
-Each row is converted into a **self‑contained semantic sentence**.
-
-Example (Trades):
+### Example (Trade Row)
 
 ```
-Trade event on 2024‑01‑15 for AlphaFund: BUY 100 units of AAPL at price 187.5 strategy Momentum
+Trade event on 2024-01-15 for AlphaFund:
+BUY 100 units of AAPL at price 187.5 strategy Momentum
 ```
 
-Example (Holdings):
+### Example (Holding Row)
 
 ```
-Holding position as of 2024‑01‑31 for AlphaFund: Held 250 units of AAPL valued at 46875 with YTD P&L 4200
+Holding position as of 2024-01-31 for AlphaFund:
+Held 250 units of AAPL valued at 46875 with YTD P&L 4200
 ```
 
-**Why this matters:**
-
-* Vector embeddings operate on *meaning*, not tables
-* Each row becomes independently searchable
+This transformation enables **semantic vector search over tabular data**.
 
 ---
 
-## A4. Embedding Generation Architecture (Batch‑Optimized)
+# Embedding Generation
 
-```text
-semantic_core strings
-      ↓
-Batching (20 items)
-      ↓
-Gemini Embedding API
-      ↓
-float32 vectors
+Semantic sentences are converted into vector embeddings.
+
+```mermaid
+flowchart LR
+
+Text["Semantic Text"]
+Batch["Batch Processing"]
+API["Embedding Model API"]
+Vectors["Embedding Vectors"]
+
+Text --> Batch
+Batch --> API
+API --> Vectors
 ```
 
-**Key optimizations:**
+### Optimizations
 
-* Controlled batch size (free‑tier safe)
-* Retry with backoff
-* Dummy vector fallback to preserve row alignment
+- Batch size control
+- Retry with exponential backoff
+- Dummy vectors for alignment safety
 
-Vectors are persisted as:
+Embeddings are stored in:
 
 ```
 vectors/float/
@@ -129,27 +237,24 @@ vectors/float/
 └── holdings_embeddings.pkl
 ```
 
-This acts as a **safety checkpoint**.
-
 ---
 
-## A5. Dimensionality Reduction (PCA via FAISS)
+# Dimensionality Reduction (PCA)
 
-```text
-768‑D Embeddings
-      ↓
-FAISS PCA Training
-      ↓
-256‑D Embeddings
+High dimensional embeddings are compressed using PCA.
+
+```mermaid
+flowchart LR
+
+Emb768["768-D Embeddings"]
+PCA["FAISS PCA Training"]
+Emb256["256-D Embeddings"]
+
+Emb768 --> PCA
+PCA --> Emb256
 ```
 
-**Important properties:**
-
-* PCA is trained **once**
-* Same transform applied to trades & holdings
-* Stored using FAISS native format
-
-Output:
+The PCA transform is saved as:
 
 ```
 vectors/pca_transform.faiss
@@ -157,19 +262,32 @@ vectors/pca_transform.faiss
 
 ---
 
-## A6. Vector Indexing (IVF + PQ)
+# Vector Indexing (FAISS)
 
-```text
-PCA Vectors
-      ↓
-IVF Partitioning (nlist=64)
-      ↓
-Product Quantization (m=32, 8‑bit)
-      ↓
-FAISS Indexes
+Optimized vector indexes are created using FAISS.
+
+```mermaid
+flowchart LR
+
+Vectors["PCA Vectors"]
+IVF["IVF Partitioning"]
+PQ["Product Quantization"]
+Index["FAISS Index"]
+
+Vectors --> IVF
+IVF --> PQ
+PQ --> Index
 ```
 
-Two independent indexes are built:
+### Index Parameters
+
+| Parameter | Value |
+|---|---|
+| IVF clusters | 64 |
+| PQ segments | 32 |
+| Quantization | 8 bit |
+
+Separate indexes are built for each dataset.
 
 ```
 vectors/
@@ -177,220 +295,322 @@ vectors/
 └── holdings_index/index_pq.faiss
 ```
 
-**Why separate indexes:**
-
-* Avoids cross‑domain noise
-* Enables intent‑based routing
-* Improves precision
-
 ---
 
-## RESULT OF MACRO PIPELINE A
+# Online Query Pipeline
 
-At this point, the system has:
+The online pipeline runs **per user query**.
 
-* Clean validated data
-* Semantic text per row
-* Optimized vector embeddings
-* Search‑ready FAISS indexes
+```mermaid
+flowchart LR
 
-The system is now **half‑ready**.
+Query["User Query"]
+Cache["Semantic Cache"]
+Intent["Intent Detection"]
+Embed["Query Embedding"]
+Search["FAISS Search"]
+Context["Context Reconstruction"]
+Answer["Answer Generation"]
 
----
-
-# PIPELINE B- ONLINE QUERY PIPELINE
-
-> **Goal:** Answer user questions using only indexed financial data — safely and deterministically.
-
-This pipeline runs **per user query**.
-
----
-
-## B1. User Query Intake
-
-```text
-User Question
-      ↓
-Raw Query String
-```
-
-No preprocessing, no assumptions.
-
----
-
-## B2. Semantic Caching Architecture (Redis)
-
-```text
-Query
-  ↓
-Hash(query)
-  ↓
-Redis Lookup
-```
-
-Cached artifacts:
-
-* Query embeddings
-* (Optionally) answers
-
-**Outcome paths:**
-
-```
-Cache Hit  → Skip expensive calls
-Cache Miss → Continue pipeline
+Query --> Cache
+Cache --> Intent
+Intent --> Embed
+Embed --> Search
+Search --> Context
+Context --> Answer
 ```
 
 ---
 
-## B3. Intent Detection & Routing Logic
+# Semantic Cache Layer
 
-```text
-Query
-  ↓
-Heuristic Rules
-  ↓ (fallback)
-Gemini Flash Classifier
-  ↓
-Intent Plan
+The system checks Redis before performing expensive operations.
+
+```mermaid
+flowchart LR
+
+Query["Query"]
+Hash["Query Hash"]
+Redis["Redis Cache"]
+
+Query --> Hash
+Hash --> Redis
 ```
 
-Possible intents:
+### Cached Artifacts
 
-* `TRADE_ONLY`
-* `HOLDING_ONLY`
-* `MIXED`
-* `UNSUPPORTED`
-
-The intent directly controls **which FAISS indexes are queried**.
+- Query embeddings
+- Generated answers
 
 ---
 
-## B4. Query Embedding & PCA Projection
+# Intent Detection
 
-```text
-Query Text
-      ↓
-Embedding Model
-      ↓
-768‑D Vector
-      ↓
-PCA Transform
-      ↓
-256‑D Vector
+Queries are classified to determine which dataset should be searched.
+
+```mermaid
+flowchart LR
+
+Query["User Query"]
+Rules["Heuristic Rules"]
+LLM["Gemini Flash Classifier"]
+Intent["Intent Output"]
+
+Query --> Rules
+Rules --> Intent
+Rules --> LLM
+LLM --> Intent
 ```
 
-This ensures **query vectors live in the same space** as indexed data.
+### Supported Intents
+
+| Intent | Description |
+|---|---|
+| TRADE_ONLY | Query relates to trades |
+| HOLDING_ONLY | Query relates to holdings |
+| MIXED | Query requires both datasets |
+| UNSUPPORTED | Query cannot be answered |
 
 ---
 
-## B5. FAISS Retrieval Architecture
+# Query Embedding
 
-```text
-Query Vector
-      ↓
-FAISS Search (nprobe=8)
-      ↓
-Top‑K Row IDs
-```
+User queries are embedded and projected to the same vector space.
 
-Separate searches occur for:
+```mermaid
+flowchart LR
 
-* Trades index
-* Holdings index
+Query["Query Text"]
+Embed["Embedding Model"]
+Vector768["768-D Vector"]
+PCA["PCA Transform"]
+Vector256["256-D Vector"]
 
-Only indexes allowed by intent are queried.
-
----
-
-## B6. Context Reconstruction Layer
-
-```text
-Row IDs
-      ↓
-CSV Row Lookup
-      ↓
-Textual Context Blocks
-```
-
-Context is reconstructed using **original validated CSV rows** — not embeddings.
-
-This guarantees:
-
-* Numerical accuracy
-* No hallucinated values
-
----
-
-## B7. Answer Generation (Guarded RAG)
-
-```text
-Question + Context
-      ↓
-Strict Prompt
-      ↓
-Gemini Flash
-      ↓
-Final Answer
-```
-
-**Hard rule:**
-If context is empty or insufficient:
-
-```
-"Sorry can not find the answer"
-```
-
-No guessing. No external knowledge.
-
----
-
-## RESULT OF MACRO PIPELINE B
-
-The system produces:
-
-* Context‑grounded answers
-* Or explicit refusal when data is absent
-
----
-
-# COMPLETE SYSTEM : COMPILED VIEW
-
-```text
-                ┌───────────────────────────┐
-                │   OFFLINE PIPELINE (A)    │
-                │                           │
-Raw CSV ──► Validate ──► Serialize ──► Embed ──► PCA ──► FAISS
-                │                           │
-                └───────────────▲───────────┘
-                                │
-                                │ (Indexes + PCA)
-                                │
-                ┌───────────────┴───────────┐
-                │   ONLINE PIPELINE (B)     │
-                │                           │
-User Query ──► Cache ──► Intent ──► Embed ──► Search ──► Context ──► Answer
-                │                           │
-                └───────────────────────────┘
+Query --> Embed
+Embed --> Vector768
+Vector768 --> PCA
+PCA --> Vector256
 ```
 
 ---
 
-## 🎯 Final Engineering Characteristics
+# FAISS Retrieval
 
-* **Deterministic** (no agent chaos)
-* **Auditable** (CSV → Answer traceable)
-* **Cost‑efficient** (batching, caching, PQ)
-* **Scalable** (separate offline/online paths)
-* **Production‑safe** (no hallucination paths)
+Relevant financial rows are retrieved using vector similarity search.
+
+```mermaid
+flowchart LR
+
+QueryVector["Query Vector"]
+FAISS["FAISS Search"]
+Results["Top-K Row IDs"]
+
+QueryVector --> FAISS
+FAISS --> Results
+```
+
+Search parameters:
+
+| Parameter | Value |
+|---|---|
+| nprobe | 8 |
+| retrieval | top-K results |
 
 ---
 
-## 📌 Mental Model (One‑Line)
+# Context Reconstruction
 
-> **LLMs talk. FAISS searches. Pandas computes. Rules decide.**
+Retrieved row IDs are mapped back to the original CSV rows.
 
-This architecture reflects that principle end‑to‑end.
+```mermaid
+flowchart LR
+
+IDs["Row IDs"]
+Lookup["CSV Lookup"]
+Context["Context Blocks"]
+
+IDs --> Lookup
+Lookup --> Context
+```
+
+This guarantees that answers always reference **real financial records**.
 
 ---
 
-**Thankyou so much for giving your time to read this, Have a great time ahead :)**
+# Answer Generation
+
+The final answer is generated using strict RAG prompting.
+
+```mermaid
+flowchart LR
+
+Question["User Question"]
+Context["Retrieved Context"]
+Prompt["Guarded Prompt"]
+LLM["Gemini Flash"]
+Answer["Final Answer"]
+
+Question --> Prompt
+Context --> Prompt
+Prompt --> LLM
+LLM --> Answer
+```
+
+### Guardrail Rule
+
+If relevant context is missing:
+
+```
+Sorry can not find the answer
+```
+
+No guessing is allowed.
+
+---
+
+# Final System Architecture
+
+```mermaid
+graph TD
+
+User["User Query"]
+
+Cache["Redis Cache"]
+Intent["Intent Detection"]
+Embed["Query Embedding"]
+
+SearchTrades["Trades FAISS Index"]
+SearchHoldings["Holdings FAISS Index"]
+
+Context["Context Builder"]
+Answer["Answer Generator"]
+
+User --> Cache
+Cache --> Intent
+Intent --> Embed
+Embed --> SearchTrades
+Embed --> SearchHoldings
+SearchTrades --> Context
+SearchHoldings --> Context
+Context --> Answer
+```
+
+---
+
+# Tech Stack
+
+| Category | Technology |
+|---|---|
+| Programming Language | Python |
+| Data Processing | Pandas |
+| Vector Search | FAISS |
+| Embeddings | Gemini Embedding API |
+| LLM | Gemini Flash |
+| Cache | Redis |
+| Storage | CSV |
+| Vector Storage | FAISS Index |
+| Dimensionality Reduction | PCA |
+
+---
+
+# Project Structure
+
+```
+financial-rag-system
+
+data/
+    trades.csv
+    holdings.csv
+    trades_quarantine.csv
+
+vectors/
+    float/
+        trades_embeddings.pkl
+        holdings_embeddings.pkl
+
+    trades_index/
+        index_pq.faiss
+
+    holdings_index/
+        index_pq.faiss
+
+    pca_transform.faiss
+
+pipeline/
+
+    offline/
+        ingest_data.py
+        validate_schema.py
+        semantic_serializer.py
+        embedding_generator.py
+        pca_trainer.py
+        index_builder.py
+
+    online/
+        query_cache.py
+        intent_router.py
+        query_embedder.py
+        faiss_search.py
+        context_builder.py
+        answer_generator.py
+
+utils/
+    logger.py
+    retry.py
+    hashing.py
+
+main.py
+requirements.txt
+README.md
+```
+
+---
+
+# Running the System
+
+Install dependencies:
+
+```
+pip install -r requirements.txt
+```
+
+Run the offline build pipeline:
+
+```
+python pipeline/offline/build_index.py
+```
+
+Start the query system:
+
+```
+python main.py
+```
+
+---
+
+# Engineering Principles
+
+- Deterministic architecture
+- Traceable answers
+- No hallucination pathways
+- Strict financial data discipline
+- Efficient retrieval pipeline
+- Separation of offline and online workloads
+
+---
+
+# Mental Model
+
+```
+LLMs talk
+FAISS searches
+Pandas computes
+Rules decide
+```
+
+---
+
+# Author
+
+Shaktesh Pandey  
+GitHub: https://github.com/shaktiap1
